@@ -1,0 +1,324 @@
+--spu_id sku_id seller_name brand_name sku_name vender_id vender_name sku_status presale_status cat_lvl1_id cat_lvl1_name_en cat_lvl2_id cat_lvl2_name_en cat_lvl3_id cat_lvl3_name_en selling_price promo_price avg_cost_price real_stock usable_stock Support cross WH item_shelf_life
+SELECT
+	skuda.spu_id,
+	skuda.sku_id,
+	skuda.sku_name,
+	skuda.shop_name seller_name,
+	skuda.brand_name_en brand_name,
+	skuda.vender_id,
+	skuda.vender_name,
+	skuda.sku_status,
+	pres.presale_status,
+	skuda.cat1id,
+	skuda.cat_lvl1_name_en,
+	skuda.cat2id,
+	skuda.cat_lvl2_name_en,
+	skuda.cat3id,
+	skuda.cat_lvl3_name_en,
+	abc2.jd_prc jd_price,
+	prom.price promotion_price,
+	CASE
+		WHEN abc1.avg_cost_price = 'NULL'
+			OR abc1.avg_cost_price IS NULL
+			OR abc1.avg_cost_price = ''
+		THEN abc2.cost_price
+		ELSE abc1.avg_cost_price
+	END AS avg_mov_cost,
+	SUM(NVL(abc.real_stock, 0)) realstock_whjkt,
+	SUM(NVL(abc.usable_order, 0)) usable_stock_whjkt,
+	y.cross_warehouse,
+	item_shelf_life
+	--major_supp_name vendor_name,
+	--major_supp_brevity_code vendor_code
+FROM
+	(
+		SELECT
+			item_id spu_id,
+			item_sku_id sku_id,
+			sku_name,
+			shop_name,
+			brand_name_en,
+			item_shelf_life,
+			item_first_cate_cd cat1id,
+			item_second_cate_cd cat2id,
+			item_third_cate_cd cat3id,
+			item_first_cate_name_en cat_lvl1_name_en,
+			item_second_cate_name_en cat_lvl2_name_en,
+			item_third_cate_name_en cat_lvl3_name_en,
+			major_supp_brevity_code,
+			vender_id,
+			vender_name,
+			CASE
+				WHEN sku_status_cd = 0
+				THEN 'Offshelves'
+				WHEN sku_status_cd = 1
+				THEN 'Onshelves'
+				WHEN sku_status_cd = 10
+				THEN 'Deleted'
+			END AS sku_status,
+			major_supp_name
+		FROM
+			gdm.gdm_m03_glb_item_sku_da
+		WHERE
+			dt = sysdate( - 1)
+			AND shop_id = 1
+			AND
+			(
+				sku_status_cd = 0
+				OR sku_status_cd = 1
+			)
+			AND item_first_cate_cd IN(75060932, --Laptops & Desktops
+			75060941, --Phones, Tablets & Accessories
+			75060966, --Cameras
+			75060992, --Audio
+			75061014, --Computer Accessories
+			75061038, --Gaming & Smart
+			75061069, --Home Appliances
+			75061076, --Toys & Hobbies
+			75061132, --Groceries & Health Care
+			75061249, --Sports, Hobbies & Outdoor
+			75061421, --Automotive
+			75061498, --Clothes, Shoes, & Accessories
+			75061690, --Home Living
+			75063380, --Building
+			75061316 --Moms & Baby
+			)
+	)
+	skuda
+LEFT JOIN
+	(
+		SELECT
+			sku_id,
+			CASE
+				WHEN pre_sale = 1
+				THEN 'Presale'
+				WHEN pre_sale = 0
+				THEN 'Not Presale'
+			END AS presale_status
+		FROM
+			fdm.fdm_epi_ware_ware_sku_chain
+		WHERE
+			dp = 'ACTIVE'
+	)
+	pres
+ON
+	pres.sku_id = skuda.sku_id
+LEFT JOIN
+	(
+		SELECT
+			sttk.sku_id,
+			sttk.dc_id,
+			sttk.sid,
+			NVL(SUM(sttk.num_stock), 0) AS real_stock,
+			SUM(sttk.usable_stock) AS usable_order,
+			SUM(sttk.presellnum) AS usable_presell
+		FROM
+			(
+				SELECT
+					stk.sku_id,
+					stk.sid,
+					stk.dc_id,
+					stk.num_stock,
+					stk.num_order_booking,
+					prsl.presellnum,
+					NVL(stk.num_stock, 0) + NVL(prsl.presellnum, 0) - NVL(stk.num_order_booking, 0) - NVL(stk.num_order_transfer, 0) - NVL(stk.num_inner_trans, 0) - NVL(stk.num_app_booking, 0) - NVL(stk.num_transfer_plan_out, 0) - NVL(stk.num_nosale, 0) AS usable_stock
+				FROM
+					(
+						SELECT
+							sku_id,
+							dc_id,
+							sid,
+							num_stock,
+							num_order_booking,
+							num_order_transfer,
+							num_inner_trans,
+							num_app_booking,
+							num_transfer_plan_out,
+							num_nosale
+						FROM
+							fdm.fdm_stock_id_glb_core_stocknum_chain
+						WHERE
+							dp = 'ACTIVE'
+							AND num_stock > 0
+							AND sid IN(1, 2, 3, 4, 5, 6)
+							AND dc_id IN(100, 200)
+					)
+					stk
+				LEFT JOIN
+					(
+						SELECT
+							sku_id,
+							sid,
+							dc_id,
+							(SUM(num_reserve) - SUM(num_arrival)) AS presellnum
+						FROM
+							fdm.fdm_stock_id_glb_stocknum_reserve_chain
+						WHERE
+							dp = 'ACTIVE'
+							AND sid IN(1, 2, 3, 4, 5, 6)
+							AND dc_id IN(100, 200)
+						GROUP BY
+							sku_id,
+							sid,
+							dc_id
+					)
+					prsl
+				ON
+					stk.sku_id = prsl.sku_id
+					AND stk.sid = prsl.sid
+					AND stk.dc_id = prsl.dc_id
+				LEFT OUTER JOIN
+					(
+						SELECT
+							store_id,
+							store_name,
+							delv_center_id,
+							delv_center_name
+						FROM
+							dim.dim_store_info
+					)
+					st
+				ON
+					stk.sid = st.store_id
+					AND stk.dc_id = st.delv_center_id
+			)
+			sttk
+		GROUP BY
+			sttk.sku_id,
+			sttk.dc_id,
+			sttk.sid
+	)
+	abc ON abc.sku_id = skuda.sku_id
+LEFT JOIN
+	(
+		SELECT
+			t1.wid AS sku_id,
+			t1.chbdj AS avg_cost_price
+		FROM
+			fdm.fdm_fms_stockprice_cw_kcmx_zc t1
+		WHERE
+			dt = sysdate( - 1)
+	)
+	abc1
+ON
+	abc1.sku_id = skuda.sku_id
+LEFT JOIN
+	(
+		SELECT
+			item_sku_id,
+			jd_prc,
+			cost_prc cost_price
+		FROM
+			gdm.gdm_m03_glb_item_sku_price_da
+		WHERE
+			dt = sysdate( - 1)
+	)
+	abc2
+ON
+	abc2.item_sku_id = skuda.sku_id
+LEFT JOIN
+	(
+		SELECT
+			a.time,
+			a.item_sku_id skuid,
+			a.prom price
+		FROM
+			(
+				SELECT
+					from_unixtime(unix_timestamp(create_tm, 'yyyy-MM-dd HH:mm:ss.SSS')) TIME,
+					item_sku_id,
+					fixed_price prom
+				FROM
+					gdm.gdm_m07_glb_sku_promotion
+				WHERE
+					dt = '4712-12-31'
+					AND
+					(
+						lower(promt_name) NOT LIKE '%superdeal%'
+						OR lower(promt_name) NOT LIKE '%super deal%'
+						OR lower(promt_name) NOT LIKE '%super%'
+						OR lower(promt_name) NOT LIKE '%deal%'
+					)
+					AND dt = '4712-12-31'
+					AND check_flag = 1
+					AND sysdate( - 1) BETWEEN to_date(begin_tm) AND to_date(end_tm)
+					AND delete_flag = 0
+			)
+			a
+		JOIN
+			(
+				SELECT
+					MAX(from_unixtime(unix_timestamp(create_tm, 'yyyy-MM-dd HH:mm:ss.SSS'))) TIME,
+					item_sku_id
+				FROM
+					gdm.gdm_m07_glb_sku_promotion
+				WHERE
+					dt = '4712-12-31'
+					AND
+					(
+						lower(promt_name) NOT LIKE '%superdeal%'
+						OR lower(promt_name) NOT LIKE '%super deal%'
+						OR lower(promt_name) NOT LIKE '%super%'
+						OR lower(promt_name) NOT LIKE '%deal%'
+					)
+					AND dt = '4712-12-31'
+					AND check_flag = 1
+					AND sysdate( - 1) BETWEEN to_date(begin_tm) AND to_date(end_tm)
+					AND delete_flag = 0
+				GROUP BY
+					item_sku_id
+			)
+			b
+		ON
+			a.item_sku_id = b.item_sku_id
+			AND a.time = b.time
+	)
+	prom ON prom.skuid = skuda.sku_id
+LEFT OUTER JOIN
+	(
+		SELECT
+			sku_id,
+			CASE
+				WHEN business_value = "0"
+					OR business_value IS NULL
+					OR business_value = ""
+				THEN "not supported"
+				WHEN business_value = "1"
+				THEN "supported"
+			END cross_warehouse
+		FROM
+			fdm.fdm_product_idn_jed_sku_business_label_chain
+		WHERE
+			dp = 'ACTIVE'
+			AND business_key = 24
+	)
+	y
+ON
+	skuda.sku_id = y.sku_id
+GROUP BY
+	skuda.spu_id,
+	skuda.sku_id,
+	skuda.sku_name,
+	skuda.shop_name,
+	skuda.brand_name_en,
+	skuda.vender_id,
+	skuda.vender_name,
+	skuda.sku_status,
+	pres.presale_status,
+	skuda.cat1id,
+	skuda.cat_lvl1_name_en,
+	skuda.cat2id,
+	skuda.cat_lvl2_name_en,
+	skuda.cat3id,
+	skuda.cat_lvl3_name_en,
+	abc2.jd_prc,
+	prom.price,
+	CASE
+		WHEN abc1.avg_cost_price = 'NULL'
+			OR abc1.avg_cost_price IS NULL
+			OR abc1.avg_cost_price = ''
+		THEN abc2.cost_price
+		ELSE abc1.avg_cost_price
+	END,
+	y.cross_warehouse,
+	item_shelf_life
