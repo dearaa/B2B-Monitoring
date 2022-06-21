@@ -1,0 +1,160 @@
+--SPU ID item_sku_id sku_name area (Warehouse) Stock in All WH Usable order in All WH Usable presale in All WH presale_status item_shelf_life
+SELECT
+    tag.tagging,
+	skuda.item_id SPU_ID,
+	skuda.item_sku_id SKU_ID,
+	skuda.sku_name,
+	store_name,
+	delv_center_name,
+	SUM(NVL(stock.real_stock, 0)) stock_in_all_wh,
+	SUM(NVL(stock.usable_order, 0)) usable_stock_in_all_wh,
+	SUM(NVL(stock.usable_presell, 0)) usable_presale_in_all_wh,
+	pres.presale_status,
+	skuda.item_shelf_life
+FROM
+	(
+		SELECT
+			item_id,
+			item_sku_id,
+			sku_name,
+			item_first_cate_name_en,
+			item_second_cate_name_en,
+			item_third_cate_name_en,
+			item_shelf_life,
+			shop_name,
+			CASE
+				WHEN sku_status_cd = 0
+				THEN 'Off Shelf'
+				WHEN sku_status_cd = 1
+				THEN 'On Shelf'
+				WHEN sku_status_cd = 10
+				THEN 'Deleted'
+			END sku_status
+		FROM
+			gdm.gdm_m03_glb_item_sku_da
+		WHERE
+			dt = sysdate( - 1)
+			AND vender_id = 1
+			--AND item_sku_id IN(SELECT sku_id from dev.dr_b2bsku)
+	)
+	skuda
+INNER JOIN
+	(
+		SELECT sku_id, sku_name, tagging FROM dev.dr_b2bsku
+	)
+	tag
+ON
+	tag.sku_id = skuda.item_sku_id
+LEFT JOIN
+	(
+		SELECT
+			sttk.sku_id,
+			sttk.dc_id,
+			sttk.sid,
+			NVL(SUM(sttk.num_stock), 0) AS real_stock,
+			SUM(sttk.usable_stock) AS usable_order,
+			SUM(sttk.presellnum) AS usable_presell
+		FROM
+			(
+				SELECT
+					stk.sku_id,
+					stk.dc_id,
+					stk.sid,
+					stk.num_stock,
+					stk.num_order_booking,
+					prsl.presellnum,
+					NVL(stk.num_stock, 0) + NVL(prsl.presellnum, 0) - NVL(stk.num_order_booking, 0) - NVL(stk.num_order_transfer, 0) - NVL(stk.num_inner_trans, 0) - NVL(stk.num_app_booking, 0) - NVL(stk.num_transfer_plan_out, 0) - NVL(stk.num_nosale, 0) AS usable_stock
+				FROM
+					(
+						SELECT
+							sku_id,
+							dc_id,
+							sid,
+							num_stock,
+							num_order_booking,
+							num_order_transfer,
+							num_inner_trans,
+							num_app_booking,
+							num_transfer_plan_out,
+							num_nosale
+						FROM
+							fdm.fdm_stock_id_glb_core_stocknum_chain
+						WHERE
+							dp = 'ACTIVE'
+							AND num_stock > 0
+							AND sid IN(1, 2, 3, 4, 5, 6)
+							AND dc_id IN(100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 200, 201, 202, 203, 401, 500)
+					)
+					stk
+				LEFT JOIN
+					(
+						SELECT
+							sku_id,
+							sid,
+							dc_id,
+							(SUM(num_reserve) - SUM(num_arrival)) AS presellnum
+						FROM
+							fdm.fdm_stock_id_glb_stocknum_reserve_chain
+						WHERE
+							dp = 'ACTIVE'
+							AND sid IN(1, 2, 3, 4, 5, 6)
+							AND dc_id IN(100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 200, 201, 202, 203, 401, 500)
+						GROUP BY
+							sku_id,
+							sid,
+							dc_id
+					)
+					prsl
+				ON
+					stk.sku_id = prsl.sku_id
+					AND stk.sid = prsl.sid
+					AND stk.dc_id = prsl.dc_id
+			)
+			sttk
+		GROUP BY
+			sttk.sku_id,
+			sttk.dc_id,
+			sttk.sid
+	)
+	stock ON stock.sku_id = skuda.item_sku_id
+LEFT JOIN
+	(
+		SELECT
+			store_id,
+			store_name,
+			delv_center_id,
+			delv_center_name
+		FROM
+			dim.dim_store_info
+	)
+	st
+ON
+	stock.sid = st.store_id
+	AND stock.dc_id = st.delv_center_id
+LEFT JOIN
+	(
+		SELECT
+			sku_id,
+			CASE
+				WHEN pre_sale = 1
+				THEN 'Presale'
+				WHEN pre_sale = 0
+				THEN 'Not Presale'
+			END AS presale_status
+		FROM
+			fdm.fdm_epi_ware_ware_sku_chain
+		WHERE
+			dp = 'ACTIVE'
+	)
+	pres
+ON
+	pres.sku_id = skuda.item_sku_id
+GROUP BY
+    tag.tagging,
+	skuda.item_id,
+	skuda.item_sku_id,
+	skuda.sku_name,
+	store_name,
+	delv_center_name,
+	pres.presale_status,
+	skuda.item_shelf_life
