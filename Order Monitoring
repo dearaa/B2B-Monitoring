@@ -1,0 +1,572 @@
+--user_pin nickname child_ord_id ord_id sku_id sku_name sale_qtty jd_prc product_amt freight_per_sku total_amount_received / Order payable amount product_price special_prom coupon_pay_amt sku_freight_coupon_amt fullcut_disc order_origin Business_type ord_type B2B SKU Tag pay_mode ord_state (Order Status) order_flow avg_mov_cost gross_margin item_first_cate_name item_second_cate_name item_third_cate_name receiver_name rev_addr_province_name rev_addr_city_name rev_addr_county_name book_dt
+-- payment_dt ship_dt ord_compl_dt cancel_application_time cancel_time cancel_reason order_status_when_apply store_name delv_center_name Seller Description
+SELECT
+	ord.user_pin,
+	us.nickname,
+	ord.parent_ord_id,
+	ord.ord_id child_ord_id,
+	ord.sku_id,
+	ord.sku_name,
+	ord.sale_qtty,
+	prc.jd_prc,
+	ord.sku_freight_amt freight_per_sku,
+	--shipping_amount,
+	user_payable_pay_amt total_amount_received,
+	product_price,
+	special_prom,
+	coupon_pay_amt,
+	sku_freight_coupon_amt,
+	fullcut_disc,
+	order_origin,
+	bus_type,
+	ord_type_dec,
+	is_vsp_ord,
+	b2b_flag is_b2b_sku,
+	ord.pay_mode,
+	os.order_status_dec,
+	os.order_flow_dec,
+--	CASE
+--		WHEN abc1.avg_cost_price = 'NULL'
+--			OR abc1.avg_cost_price IS NULL
+--			OR abc1.avg_cost_price = ''
+--		THEN prc.cost_prc
+--		ELSE abc1.avg_cost_price
+--	END AS avg_mov_cost,
+--	CASE
+--		WHEN ord.vender_id IN(0, 1)
+--			AND ord_biz_type IN(1, 10, 11)
+--		THEN after_prefr_amt -(amp4.price * sale_qtty)
+--		WHEN ord.vender_id IN(0, 1)
+--			AND amp.price IS NOT NULL
+--		THEN after_prefr_amt -(amp.price * sale_qtty)
+--		WHEN ord.vender_id IN(0, 1)
+--			AND amp2.price IS NOT NULL
+--		THEN after_prefr_amt -(amp2.price * sale_qtty)
+--		WHEN ord.vender_id IN(0, 1)
+--			AND amp3.price IS NOT NULL
+--		THEN after_prefr_amt -(amp3.price * sale_qtty)
+--	END AS gross_margin,
+	--amount_received,
+	item_first_cate_name,
+	item_second_cate_name,
+	item_third_cate_name,
+	CASE
+		WHEN
+			(
+				cons1.consignee_first_name <> NULL
+				OR cons1.consignee_first_name IS NOT NULL
+			)
+		THEN cons1.consignee_first_name
+		WHEN
+			(
+				cons3.consignee <> NULL
+				OR cons3.consignee IS NOT NULL
+			)
+		THEN cons3.consignee
+	END AS receiver_name,
+	ord.province,
+	ord.city,
+	ord.county,
+	ord.book_tm,
+	ord.book_dt,
+	ord.pay_tm,
+	ord.ship_tm,
+	ord.ord_compl_tm,
+	ord.ord_cancel_tm,
+	SUBSTRING(from_unixtime(CAST(cr.oper_time / 1000 AS bigint)), 0, 19) AS cancel_application_time,
+	poid.cancel_time,
+	cancel_reason_en Cancel_reason,
+	ord_flow_desc_en order_status_when_apply,
+	ord.ord_type_dec,
+	store_name,
+	delv_center_name
+FROM
+	(
+		SELECT
+			sale_ord_id AS ord_id,
+			sale_ord_dt AS book_dt,
+			user_log_acct user_pin,
+			MAX(dt) AS latest_update
+		FROM
+			adm.adm_s04_glb_trade_ord_det_sku_snapshot
+		WHERE
+			-- (
+			--  intraday_ord_deal_flag = 1
+			--  OR intraday_ord_complete_flag = 1
+			-- )
+			YEAR(sale_ord_dt) >= YEAR(sysdate( - 30))
+			AND MONTH(sale_ord_dt) >= MONTH(sysdate( - 30))
+			AND dt >= '2022-01'
+		GROUP BY
+			sale_ord_id,
+			sale_ord_dt,
+			user_log_acct
+	)
+	main
+INNER JOIN
+	(
+		SELECT
+			user_log_acct,
+			user_nickname AS nickname
+		FROM
+			gdm.gdm_m01_glb_userinfo_basic_da
+		WHERE
+			dt = sysdate( - 1)
+			AND user_log_acct IN
+			(
+				SELECT * FROM dev.b2b_userpin_mclei
+			)
+		
+		UNION ALL
+		
+		SELECT
+			user_log_acct,
+			user_nickname AS nickname
+		FROM
+			gdm.gdm_m01_glb_userinfo_basic_da
+		WHERE
+			dt = sysdate( - 1)
+			AND user_log_acct IN('vsp-tiktok', 'akulaku_jd', 'ideal_home', 'jdid_uxtuemwtllop', 'jdid_zuvldbnodisu', 'jdid_neadvpmqqvkz', 'vsp-nestlecrm')
+	)
+	us
+ON
+	main.user_pin = us.user_log_acct
+LEFT OUTER JOIN
+	(
+		SELECT
+			*
+		FROM
+			(
+				SELECT
+					parent_sale_ord_id parent_ord_id,
+					item_id,
+					user_log_acct AS user_pin,
+					IF(SUBSTR(ord_flag, 265, 1) = 1, "VSP", "Non-VSP") is_vsp_ord,
+					sale_ord_id AS ord_id,
+					item_sku_id AS sku_id,
+					sku_name,
+					CASE
+						WHEN data_type = '1P'
+						THEN 'RBN'
+						WHEN data_type = '3P'
+						THEN 'POP'
+						ELSE data_type
+					END bus_type,
+					item_first_cate_name,
+					item_second_cate_name,
+					item_third_cate_name,
+					CASE ord_type_cd
+						WHEN 0
+						THEN 'Direct Sales'
+						WHEN 1
+						THEN 'Parent Order'
+						WHEN 18
+						THEN 'Dropship'
+						WHEN 22
+						THEN 'POP Marketplace'
+						WHEN 188
+						THEN 'LS (living service)'
+						WHEN 108
+						THEN 'JD LIFE'
+						WHEN 184
+						THEN 'Top Up'
+						WHEN 186
+						THEN 'Movie'
+						WHEN 183
+						THEN 'Flight'
+						WHEN 185
+						THEN 'Local Hotel'
+						WHEN 190
+						THEN 'International Hotel'
+						WHEN 191
+						THEN 'PLN Electricity Payment'
+						WHEN 187
+						THEN 'Train Ticket'
+						WHEN 192
+						THEN 'Credit card repayment'
+						WHEN 189
+						THEN 'Bus ticket'
+					END AS ord_type_dec,
+					CASE
+						WHEN pay_mode_cd = 1
+						THEN 'COD'
+						WHEN pay_mode_cd = 4
+						THEN 'Online payment'
+						ELSE pay_mode_cd
+					END AS pay_mode,
+					sale_ord_tm AS book_tm,
+					sale_ord_dt AS book_dt,
+					pay_tm,
+					out_wh_tm AS ship_tm,
+					ord_cancel_tm,
+					ord_complete_tm AS ord_compl_tm,
+					rev_addr_province_name_local AS province,
+					rev_addr_city_name_local AS city,
+					rev_addr_county_name_local AS county,
+					sale_qtty,
+					CASE
+						WHEN sale_cha_cd = 1
+						THEN 'PC'
+						WHEN sale_cha_cd = 2
+						THEN 'iOS'
+						WHEN sale_cha_cd = 3
+						THEN 'Android'
+						WHEN sale_cha_cd = 4
+						THEN 'wap'
+						WHEN sale_cha_cd = 5
+						THEN 'API Connect'
+						ELSE sale_cha_cd
+					END AS order_origin,
+					vender_id,
+					CASE
+						WHEN SUBSTR(ord_flag, 266, 1) = 1
+						THEN 1
+						WHEN ord_type_cd = 42
+						THEN 2
+						WHEN SUBSTR(ord_flag, 73, 1) = 1
+						THEN 4
+						WHEN SUBSTR(ord_flag, 157, 1) = 4
+						THEN 6
+						WHEN SUBSTR(ord_flag, 80, 1) = 2
+						THEN 7
+						WHEN SUBSTR(ord_flag, 267, 1) = 3
+						THEN 8
+						WHEN SUBSTR(ord_flag, 267, 1) = 4
+						THEN 9
+						WHEN SUBSTR(ord_flag, 266, 1) = 3
+						THEN 10
+						WHEN SUBSTR(ord_flag, 266, 1) = 4
+						THEN 11
+						WHEN SUBSTR(ord_flag, 10, 1) = 7
+							AND SUBSTR(ord_flag, 206, 1) IN(1, 2)
+						THEN 12
+						WHEN SUBSTR(ord_flag, 271, 1) = 1
+						THEN 14
+						WHEN SUBSTR(ord_flag, 292, 1) = 3
+						THEN 1401 --O2O
+						WHEN SUBSTR(ord_flag, 311, 2) = 52
+						THEN 1402 -- TikTok
+						WHEN SUBSTR(ord_flag, 265, 1) = 3
+						THEN 0
+						ELSE 9999
+					END ord_biz_type,
+					after_prefr_amt,
+					user_payable_pay_amt,
+					sku_freight_amt,
+					before_prefr_amt product_price,
+					base_offer_amt special_prom,
+					coupon_pay_amt,
+					sku_freight_coupon_amt,
+					full_minus_offer_amt fullcut_disc,
+					total_freight_amt shipping_amount,
+					(before_prefr_amt - base_offer_amt) -(coupon_pay_amt - sku_freight_coupon_amt) - full_minus_offer_amt AS amount_received,
+					store_id,
+					dt
+				FROM
+					adm.adm_s04_glb_trade_ord_det_sku_snapshot
+				WHERE
+					YEAR(sale_ord_dt) >= YEAR(sysdate( - 30))
+					AND MONTH(sale_ord_dt) >= MONTH(sysdate( - 30))
+					AND dt >= '2022-01'
+			)
+			ads
+		LEFT JOIN
+			(
+				SELECT
+					product_id,
+					CASE
+						WHEN business_key = 7
+							AND business_value = 1
+						THEN 'B2B'
+						WHEN business_key = 7
+							AND business_value = 0
+						THEN 'Non B2B'
+					END b2b_flag
+				FROM
+					fdm.fdm_product_idn_jed_product_business_label_chain
+				WHERE
+					dp = 'ACTIVE'
+					AND business_key = 2
+			)
+			product
+		ON
+			product.product_id = ads.item_id
+		LEFT JOIN
+			(
+				SELECT
+					order_id,
+					MAX(cps_id) cps_id,
+					MAX(cps_cd) cps_cd,
+					MAX(cps_type) cps_type,
+					MAX(delivery_center_id) delivery_center_id,
+					MAX(cancel_time) cancel_time
+				FROM
+					(
+						SELECT
+							order_id,
+							coupon_code_id cps_id,
+							coupon_code_id cps_cd,
+							coupon_type cps_type,
+							delivery_center_id,
+							cancel_time
+						FROM
+							fdm.fdm_epi_order_order_summary_chain
+						WHERE
+							dp = 'ACTIVE'
+						
+						UNION ALL
+						
+						SELECT
+							sale_ord_id order_id,
+							'' cps_id,
+							'' cps_cd,
+							'' cps_type,
+							delv_center_id delivery_center_id,
+							'' cancel_time
+						FROM
+							gdm.gdm_m09_glb_waybill_forward_basic_sum
+						WHERE
+							dp = 'ACTIVE'
+							AND ship_bill_id NOT LIKE '%RJ%'
+							AND ship_bill_id NOT LIKE '%AF%'
+					)
+					voc
+				GROUP BY
+					order_id
+			)
+			cps
+		ON
+			ads.ord_id = cps.order_id
+	)
+	ord ON main.ord_id = ord.ord_id
+	AND main.latest_update = ord.dt
+LEFT JOIN
+	(
+		SELECT
+			store_id,
+			store_name,
+			delv_center_id,
+			delv_center_name
+		FROM
+			dim.dim_store_info
+	)
+	st
+ON
+	ord.store_id = st.store_id
+	AND ord.delivery_center_id = st.delv_center_id
+LEFT JOIN
+	(
+		SELECT
+			order_id,
+			consignee_first_name
+		FROM
+			fdm.fdm_epi_order_order_ext_info_chain
+		WHERE
+			dp = 'ACTIVE'
+	)
+	cons1
+ON
+	cons1.order_id = ord.ord_id
+LEFT JOIN
+	(
+		SELECT
+			order_id,
+			consignee
+		FROM
+			fdm.fdm_epi_order_order_ext_chain
+		WHERE
+			dp = 'ACTIVE'
+	)
+	cons3
+ON
+	cons3.order_id = ord.ord_id
+LEFT JOIN
+	(
+		SELECT
+			item_sku_id,
+			jd_prc,
+			cost_prc
+		FROM
+			gdm.gdm_m03_glb_item_sku_price_da
+		WHERE
+			dt = sysdate( - 1)
+	)
+	prc
+ON
+	prc.item_sku_id = ord.sku_id
+LEFT OUTER JOIN --first join, to get avg moving price if any
+	(
+		SELECT
+			wid sku,
+			chbdj price,
+			dt period
+		FROM
+			fdm.fdm_fms_stockprice_cw_kcmx_zc
+		WHERE
+			YEAR(dt) >= 2022
+		GROUP BY
+			wid,
+			chbdj,
+			dt
+	)
+	amp
+ON
+	ord.sku_id = amp.sku
+	AND SUBSTR(ord.ship_tm, 0, 10) = amp.period
+LEFT OUTER JOIN --first join, to get avg moving price if any
+	(
+		SELECT
+			wid sku,
+			chbdj price,
+			dt period
+		FROM
+			fdm.fdm_fms_stockprice_cw_kcmx_zc
+		WHERE
+			YEAR(dt) >= 2022
+		GROUP BY
+			wid,
+			chbdj,
+			dt
+	)
+	amp2
+ON
+	ord.sku_id = amp2.sku
+	AND ord.book_dt = amp2.period
+LEFT OUTER JOIN --first join, to get avg moving price if any
+	(
+		SELECT
+			wid sku,
+			chbdj price,
+			dt period
+		FROM
+			fdm.fdm_fms_stockprice_cw_kcmx_zc
+		WHERE
+			YEAR(dt) >= 2022
+		GROUP BY
+			wid,
+			chbdj,
+			dt
+	)
+	amp3
+ON
+	ord.sku_id = amp3.sku
+	AND ord.book_dt = amp3.period
+LEFT OUTER JOIN --first join, to get avg moving price if any
+	(
+		SELECT
+			wid sku,
+			chbdj price,
+			dt period
+		FROM
+			fdm.fdm_fms_stockprice_cw_kcmx_zc
+		WHERE
+			YEAR(dt) >= 2022
+		GROUP BY
+			wid,
+			chbdj,
+			dt
+	)
+	amp4
+ON
+	ord.sku_id = amp4.sku
+	AND SUBSTR(ord.pay_tm, 0, 10) = amp4.period
+LEFT JOIN
+	(
+		SELECT
+			t1.wid AS sku_id,
+			t1.chbdj AS avg_cost_price
+		FROM
+			fdm.fdm_fms_stockprice_cw_kcmx_zc t1
+		WHERE
+			dt = sysdate( - 1)
+	)
+	abc1
+ON
+	abc1.sku_id = ord.sku_id
+LEFT JOIN
+	(
+		SELECT
+			order_id,
+			cancel_reason AS cancel_reason_cd,
+			operator,
+			oper_time
+		FROM
+			fdm.fdm_epi_order_order_cancel_chain
+		WHERE
+			dp = "ACTIVE"
+	)
+	cr
+ON
+	ord.ord_id = cr.order_id
+LEFT JOIN
+	(
+		SELECT
+			cancel_cd AS cancel_reason_cd,
+			cancel_reason AS cancel_reason_en
+		FROM
+			dev.cancel_reason
+	)
+	dcr
+ON
+	dcr.cancel_reason_cd = cr.cancel_reason_cd
+LEFT JOIN
+	(
+		SELECT
+			order_id,
+			user_pin,
+			seller_remark,
+			cancel_time,
+			order_cancel_reason,
+			order_flow,
+			order_status
+		FROM
+			fdm.fdm_epi_order_order_summary_chain
+		WHERE
+			dp = 'ACTIVE'
+	)
+	poid
+ON
+	poid.order_id = cr.order_id
+LEFT JOIN
+	(
+		SELECT ord_flow_cd, ord_flow_desc_en FROM dim.dim_ord_flow
+	)
+	orderflow
+ON
+	orderflow.ord_flow_cd = poid.order_flow
+LEFT OUTER JOIN
+	(
+		SELECT
+			od.ord_id,
+			od.order_status_dec,
+			fl.ord_flow_desc_en AS order_flow_dec
+		FROM
+			(
+				SELECT
+					order_id AS ord_id,
+					CASE
+						WHEN order_status = 1
+						THEN "Progress"
+						WHEN order_status = 99
+						THEN "Cancel"
+						WHEN order_status = 6
+						THEN "Complete"
+					END AS order_status_dec,
+					order_flow
+				FROM
+					fdm.fdm_epi_order_order_summary_chain
+				WHERE
+					dp = "ACTIVE"
+					AND YEAR(book_time) >= YEAR(sysdate( - 30))
+					AND MONTH(book_time) >= MONTH(sysdate( - 30))
+			)
+			od
+		LEFT OUTER JOIN
+			(
+				SELECT ord_flow_cd, ord_flow_desc_en FROM dim.dim_ord_flow
+			)
+			fl
+		ON
+			od.order_flow = fl.ord_flow_cd
+	)
+	os ON ord.ord_id = os.ord_id
